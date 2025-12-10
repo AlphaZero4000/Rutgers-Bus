@@ -111,7 +111,6 @@ class TransportationSystem:
         self.name = name
         self.goAgencyName = kwargs.get('goAgencyName')
         self.homepage = kwargs.get('homepage')
-        # ... (other attributes not needed for this script) ...
 
     def getRoutes(self) -> list["Route"]:
         url = BASE_URL + f"/mapGetData.php?getRoutes=1"
@@ -476,16 +475,13 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
         
         if bus_eta_obj:
             try:
-                # If the API explicitly marks this ETA as '--' treat it as missing/invalid.
                 raw_eta_label = bus_eta_obj.get('eta')
                 if raw_eta_label is None:
                     raw_eta_label = (bus_eta_obj.get('solidEta') or {}).get('eta')
 
                 if raw_eta_label is not None and str(raw_eta_label).strip() == '--':
-                    # mark as invalid so we fall back to 9999
                     eta_seconds = None
                 else:
-                    # 3. Get the ETA in seconds from either location (only secondsSpent per policy)
                     eta_seconds = bus_eta_obj.get('secondsSpent')
                     if eta_seconds is None:
                         eta_seconds = (bus_eta_obj.get('solidEta') or {}).get('duration', None)
