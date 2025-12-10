@@ -79,7 +79,7 @@ def create_tables(conn):
     except Exception as e:
         print(f"Error creating table: {e}")
 
-def populate_system(conn, system):
+def insert_system_data(conn, system):
     print(f"Adding System: {system.name}")
     c = conn.cursor()
     c.execute(
@@ -88,7 +88,7 @@ def populate_system(conn, system):
     )
     conn.commit()
 
-def populate_routes(conn, system):
+def insert_routes_into_db(conn, system):
     c = conn.cursor()
     routes = system.getRoutes()
     for route in routes:
@@ -107,7 +107,7 @@ def populate_routes(conn, system):
     conn.commit()
     print(f"Added {len(routes)} routes.")
 
-def populate_stops_and_junction(conn, system):
+def insert_bus_stops_and_routes(conn, system):
     c = conn.cursor()
     stops = system.getStops()
     route_stop_count = 0
@@ -145,7 +145,7 @@ def populate_stops_and_junction(conn, system):
     print(f"Added {len(stops)} stops.")
 
 
-def populate_buses(conn, system):
+def insert_buses_into_db(conn, system):
     c = conn.cursor()
     vehicles = system.getVehicles()
     for bus in vehicles:
@@ -173,7 +173,6 @@ if __name__ == "__main__":
         
     print(f"Found system: {rutgers_system.name} (ID: {rutgers_system.id})\n")
     
-    # 2. Connect to and create DB tables
     conn = create_connection(DB_FILE)
     if conn is None:
         sys.exit(1)
@@ -181,7 +180,7 @@ if __name__ == "__main__":
     create_tables(conn)
     
     try:
-        populate_stops_and_junction(conn, rutgers_system) 
+        insert_bus_stops_and_routes(conn, rutgers_system) 
         
     except Exception as e:
         conn.rollback()
