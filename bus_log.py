@@ -1,3 +1,7 @@
+"""
+NOTE: Not all of this script is my code. Some of it uses the unofficial PassioGo API wrapper on github which can be found 
+here https://github.com/athuler/PassioGo
+"""
 import json
 import requests
 import sqlite3
@@ -8,11 +12,10 @@ import asyncio
 import aiohttp
 import ssl
 import certifi
-# ==================================================================
-# --- 1. ALL ORIGINAL PASSIOGO CLASSES (Slightly modified) ---
-# ==================================================================
+import passiogo as pg
+from passiogo import Vehicle
 
-BASE_URL = "https://passiogo.com"
+PASSIO_GO_URL = "https://passiogo.com"
 VERBOSE = False
 def toIntInclNone(toInt):
     if toInt is None:
@@ -36,194 +39,41 @@ def sendApiRequest(url, body):
         return None
     
     return response_json
-def haversine_distance_feet(lat1, lon1, lat2, lon2):
-    """
-    Calculates the distance between two lat/lon coordinates in feet
-    using the Haversine formula.
-    """
-    # Earth's radius in feet
+
+#This is a function I found online to find distance between two lat and lognitude points using haversine formula
+def get_distance(lat1, lon1, lat2, lon2):
     EARTH_RADIUS_FEET = 20902000 
-    
-    # Convert degrees to radians
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
     lat2_rad = math.radians(lat2)
     lon2_rad = math.radians(lon2)
     
-    # Haversine formula
     dlon = lon2_rad - lon1_rad
     dlat = lat2_rad - lat1_rad
     a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
     distance = EARTH_RADIUS_FEET * c
     return distance
 
 def find_arrived_stop(conn, bus_lat, bus_lon):
-    """
-    Finds the first stop (if any) that the bus is currently inside.
-    """
     if bus_lat is None or bus_lon is None:
         return None
-        
     try:
-        # --- THIS IS THE FIX ---
-        # Convert the bus's lat/lon strings to floats for calculation
         bus_lat_float = float(bus_lat)
         bus_lon_float = float(bus_lon)
-        # --- END OF FIX ---
-        
         c = conn.cursor()
-        # This assumes your 'Stops' table has a 'radius' column
         c.execute("SELECT stop_id, latitude, longitude, radius FROM Stops")
         all_stops = c.fetchall()
-        
         for (stop_id, stop_lat, stop_lon, radius) in all_stops:
             if stop_lat is None or stop_lon is None or radius is None:
                 continue
-                
-            # Calculate distance using the new float values
-            distance = haversine_distance_feet(bus_lat_float, bus_lon_float, stop_lat, stop_lon)
-            
-            # Check if we are inside the radius
+            distance = get_distance(bus_lat_float, bus_lon_float, stop_lat, stop_lon)
             if distance <= radius:
-                return stop_id # Return the ID of the stop we're at
-                
-        # If we loop through all stops and find no match
-        return None
-        
-    except (ValueError, TypeError) as e:
-        # This will catch the error if float(bus_lat) fails
-        print(f"  > Error converting bus lat/lon to float in find_arrived_stop: {e}", file=sys.stderr)
-        return None
-    except sqlite3.OperationalError as e:
-        print(f"  > CRITICAL ERROR: Could not find 'radius' column in 'Stops' table.")
-        print(f"  > You must update your metadata script to include the 'radius' field.")
-        print(f"  > Error: {e}", file=sys.stderr)
+                return stop_id 
         return None
     except Exception as e:
-        print(f"  > Error in find_arrived_stop: {e}", file=sys.stderr)
+        print(f"Error in find_arrived_stop: {e}")
         return None
-    
-class TransportationSystem:
-    def __init__(self, id: int, name: str = None, **kwargs):
-        self.id = id
-        self.name = name
-        self.goAgencyName = kwargs.get('goAgencyName')
-        self.homepage = kwargs.get('homepage')
-
-    def getRoutes(self) -> list["Route"]:
-        url = BASE_URL + f"/mapGetData.php?getRoutes=1"
-        body = {"systemSelected0": str(self.id), "amount": 1}
-        routes = sendApiRequest(url, body)
-        
-        if routes is None: return []
-        if "all" in routes: routes = routes["all"]
-        
-        allRoutes = []
-        for route in routes:
-            allRoutes.append(Route(system=self, **route))
-        return allRoutes
-
-    def getStops(self) -> list["Stop"]:
-        url = BASE_URL + "/mapGetData.php?getStops=2"
-        body = {"s0": str(self.id), "sA": 1}
-        stops = sendApiRequest(url, body)
-        
-        if stops is None: return []
-        if stops.get("routes") == []: stops["routes"] = {}
-        if stops.get("stops") == []: stops["stops"] = {}
-
-        routesAndStops = {}
-        for routeId, route in stops.get("routes", {}).items():
-            routesAndStops[routeId] = [stop[1] for stop in route[2:] if stop != 0]
-
-        allStops = []
-        for id, stop in stops.get("stops", {}).items():
-            routesAndPositions = {}
-            for routeId, stop_ids in routesAndStops.items():
-                if stop.get("id") in stop_ids:
-                    routesAndPositions[routeId] = [i for i, x in enumerate(stop_ids) if x == stop.get("id")]
-            allStops.append(Stop(system=self, routesAndPositions=routesAndPositions, **stop))
-        return allStops
-
-    def getVehicles(self) -> list["Vehicle"]:
-        url = BASE_URL + "/mapGetData.php?getBuses=2"
-        body = {"s0": str(self.id), "sA": 1}
-        vehicles = sendApiRequest(url, body)
-        
-        if vehicles is None or "buses" not in vehicles:
-            return []
-        
-        allVehicles = []
-        for vehicleId, vehicle_data in vehicles["buses"].items():
-            if vehicleId == '-1' or not vehicle_data:
-                continue
-            
-            vehicle = vehicle_data[0]
-            # Rename API keys to match class attributes
-            vehicle['id'] = vehicle.pop('busId', None)
-            vehicle['name'] = vehicle.pop('busName', None)
-            vehicle['type'] = vehicle.pop('busType', None)
-            vehicle['routeName'] = vehicle.pop('route', None)
-            vehicle['paxLoad'] = vehicle.pop('paxLoad100', None)
-
-            allVehicles.append(Vehicle(system=self, **vehicle))
-        return allVehicles
-
-def getSystems() -> list["TransportationSystem"]:
-    url = f"{BASE_URL}/mapGetData.php?getSystems=2&sortMode=1&credentials=1"
-    systems = sendApiRequest(url, None)
-    if systems is None: return []
-    
-    allSystems = []
-    for system in systems.get("all", []):
-        system['id'] = toIntInclNone(system.get('id'))
-        system['name'] = system.get('fullname')
-        if system['id'] is not None:
-            allSystems.append(TransportationSystem(**system))
-    return allSystems
-
-class Route:
-    def __init__(self, system: TransportationSystem, **kwargs):
-        self.system = system
-        self.id = kwargs.get('id')
-        self.myid = kwargs.get('myid')
-        self.systemId = toIntInclNone(kwargs.get('userId'))
-        self.name = kwargs.get('name')
-        self.shortName = kwargs.get('shortName')
-        self.groupColor = kwargs.get('groupColor')
-
-class Stop:
-    def __init__(self, system: TransportationSystem, **kwargs):
-        self.system = system
-        self.id = kwargs.get('id')
-        self.systemId = toIntInclNone(kwargs.get('userId'))
-        self.name = kwargs.get('name')
-        self.latitude = kwargs.get('latitude')
-        self.longitude = kwargs.get('longitude')
-        self.routesAndPositions = kwargs.get('routesAndPositions', {})
-
-class Vehicle:
-    def __init__(self, system: TransportationSystem, **kwargs):
-        self.system = system
-        self.id = toIntInclNone(kwargs.get('id'))
-        self.name = kwargs.get('name')
-        self.type = kwargs.get('type')
-        self.routeId = toIntInclNone(kwargs.get('routeId')) # This is the route_myid
-        self.routeName = kwargs.get('routeName')
-        self.latitude = kwargs.get('latitude')
-        self.longitude = kwargs.get('longitude')
-        self.speed = kwargs.get('speed')
-        self.paxLoad = kwargs.get('paxLoad')
-        self.outOfService = toIntInclNone(kwargs.get('outOfService'))
-        self.tripId = toIntInclNone(kwargs.get('more')) # 'more' field seems to be tripId
-        self.calculatedCourse = kwargs.get('calculatedCourse')
-
-
-# ==================================================================
-# --- 2. ETA & DATABASE SCRIPT ---
-# ==================================================================
 
 DB_FILE = "rutgers_buses.db"
 
@@ -239,7 +89,29 @@ def create_connection(db_file):
         print(f"Error connecting to database: {e}", file=sys.stderr)
         return None
 
-# --- MODIFIED: This is the new, normalized Bus_Logs table ---
+def getVehicles(self) -> list["Vehicle"]:
+        url = PASSIO_GO_URL + "/mapGetData.php?getBuses=2"
+        body = {"s0": str(self.id), "sA": 1}
+        vehicles = sendApiRequest(url, body)
+        
+        if vehicles is None or "buses" not in vehicles:
+            return []
+        
+        allVehicles = []
+        for vehicleId, vehicle_data in vehicles["buses"].items():
+            if vehicleId == '-1' or not vehicle_data:
+                continue
+            
+            vehicle = vehicle_data[0]
+            vehicle['id'] = vehicle.pop('busId', None)
+            vehicle['name'] = vehicle.pop('busName', None)
+            vehicle['type'] = vehicle.pop('busType', None)
+            vehicle['routeName'] = vehicle.pop('route', None)
+            vehicle['paxLoad'] = vehicle.pop('paxLoad100', None)
+
+            allVehicles.append(Vehicle(system=self, **vehicle))
+        return allVehicles
+    
 def create_bus_log_table(conn):
     """ Creates the new, simplified Bus_Logs table """
     sql_statement = """
@@ -266,7 +138,6 @@ def create_bus_log_table(conn):
     except Exception as e:
         print(f"Error creating Bus_Logs table: {e}", file=sys.stderr)
 
-# --- NEW: This is the table for storing all ETAs ---
 def create_eta_log_table(conn):
     """ Creates the new table to store all ETAs """
     sql_statement = """
@@ -290,9 +161,6 @@ def create_eta_log_table(conn):
         print(f"Error creating ETA_Logs table: {e}", file=sys.stderr)
 
 def parse_pax_load(pax_load_str):
-    """
-    Converts a paxLoadS string (e.g., '117%') into a float (e.g., 117.0).
-    """
     if pax_load_str is None:
         return None
     try:
@@ -302,20 +170,13 @@ def parse_pax_load(pax_load_str):
         return None
 
 def get_eta_data(system_id: int, route_id: int, stop_id: int):
-    """
-    Gets ETA data for a specific stop on a route.
-    (kept for backward-compatibility; synchronous single-call fallback)
-    """
-    
-    # Build the simple, working URL
     url = (
-        f"{BASE_URL}/mapGetData.php"
+        f"{PASSIO_GO_URL}/mapGetData.php"
         f"?eta=3"
         f"&stopIds={stop_id}"
         f"&routeId={route_id}"
     )
     
-    # Call the API using requests.get()
     try:
         response = requests.get(url)
         response.raise_for_status()  # Check for HTTP errors
@@ -333,7 +194,7 @@ def get_eta_data(system_id: int, route_id: int, stop_id: int):
         return None
     
 async def _fetch_eta(session: aiohttp.ClientSession, system_id: int, route_id: int, stop_id: int, sem: asyncio.Semaphore):
-    url = f"{BASE_URL}/mapGetData.php?eta=3&stopIds={stop_id}&routeId={route_id}"
+    url = f"{PASSIO_GO_URL}/mapGetData.php?eta=3&stopIds={stop_id}&routeId={route_id}"
     headers = {
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "User-Agent": "python-requests/2.0 (aiohttp-mimic)"
@@ -365,10 +226,6 @@ async def _fetch_eta(session: aiohttp.ClientSession, system_id: int, route_id: i
             return stop_id, None
         
 async def fetch_etas_for_stops(system_id: int, route_id: int, stop_ids: list[int], concurrency: int = 10):
-    """
-    Concurrently fetch ETA payloads for the given stop_ids.
-    Returns a dict mapping stop_id (int) -> eta_data (dict or None).
-    """
     sem = asyncio.Semaphore(concurrency)
     timeout = aiohttp.ClientTimeout(total=15)
     results = {}
@@ -389,9 +246,6 @@ async def fetch_etas_for_stops(system_id: int, route_id: int, stop_ids: list[int
     return results
 
 def get_stops_for_route(conn, route_myid):
-    """
-    Gets all unique stop_ids for a given route from the DB.
-    """
     c = conn.cursor()
     try:
         # Get all unique stop_ids for this route
@@ -408,12 +262,7 @@ def get_stops_for_route(conn, route_myid):
         print(f"  > Error getting stops from DB: {e}", file=sys.stderr)
         return []
 
-# --- MODIFIED: Renamed and returns ALL ETAs + paxload ---
 async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
-    """
-    Finds ALL ETAs for a single bus by calling the ETA API
-    for every stop on its route.
-    """
     bus_id = bus.id
     route_myid = bus.routeId
     
@@ -463,15 +312,13 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
         
         bus_eta_obj = None
         for e in etas_for_stop:
-            # 1. Get the busId from either location
-            eta_bus_id = e.get('busId') # Format 1 (Shallow)
+            eta_bus_id = e.get('busId') 
             if eta_bus_id is None:
-                eta_bus_id = e.get('solidEta', {}).get('busId') # Format 2 (Deep)
+                eta_bus_id = e.get('solidEta', {}).get('busId') 
             
-            # 2. Check if it's the bus we're looking for
             if str(eta_bus_id) == str(bus_id):
                 bus_eta_obj = e
-                break # Found our bus
+                break 
         
         if bus_eta_obj:
             try:
@@ -485,14 +332,10 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
                     eta_seconds = bus_eta_obj.get('secondsSpent')
                     if eta_seconds is None:
                         eta_seconds = (bus_eta_obj.get('solidEta') or {}).get('duration', None)
-
-                    # attempt safe int conversion
                     try:
                         eta_seconds = int(eta_seconds) if eta_seconds is not None else None
                     except (ValueError, TypeError):
                         eta_seconds = None
-
-                # 4. Get the PaxLoad string from either location
                 pax_load_str = bus_eta_obj.get('paxLoadS')
                 if pax_load_str is None:
                     pax_load_str = (bus_eta_obj.get('solidEta') or {}).get('paxLoadS')
@@ -508,13 +351,11 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
         print("  > No ETA results found.")
         return [], None
         
-    # Sort by eta_seconds (index 1)
     sorted_etas = sorted(eta_results, key=lambda x: x[1])
 
     if VERBOSE:
         print(f"  > Sorted ETAs: {sorted_etas}")
 
-    # Find the first valid pax_load value in the sorted list
     parsed_pax_load = None
     for (_sid, _eta, pax_str) in sorted_etas:
         if pax_str is None:
@@ -524,10 +365,8 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
             parsed_pax_load = p
             break
             
-    # Return the full list and the best paxload value found
     return sorted_etas, parsed_pax_load
 
-# --- MODIFIED: This function now logs to BOTH tables ---
 def log_bus_data(conn, bus: Vehicle, all_etas_list: list, arrived_id: int):
     """
     Inserts one row into Bus_Logs and multiple rows into ETA_Logs.
@@ -535,7 +374,6 @@ def log_bus_data(conn, bus: Vehicle, all_etas_list: list, arrived_id: int):
     try:
         c = conn.cursor()
 
-        # --- Step 1: Insert the main Bus Log ---
         c.execute(
             """
             INSERT OR IGNORE INTO Buses (bus_id, name, type) 
@@ -558,20 +396,17 @@ def log_bus_data(conn, bus: Vehicle, all_etas_list: list, arrived_id: int):
             )
         )
         
-        # Get the new primary key we just created
         new_log_id = c.lastrowid
         if not new_log_id:
             print("  > Error: Could not get new log_id.")
             conn.rollback()
             return
 
-        # --- Step 2: Insert all the ETAs ---
         etas_to_insert = []
-        # We loop through the list to get the stop_id, eta, and index (for sort_order)
         for i, (stop_id, eta_seconds, pax_str) in enumerate(all_etas_list):
-            if eta_seconds != 9999: # Only log valid ETAs
+            if eta_seconds != 9999: 
                 etas_to_insert.append(
-                    (new_log_id, stop_id, eta_seconds, i) # (log_id, stop_id, eta, sort_order)
+                    (new_log_id, stop_id, eta_seconds, i) 
                 )
 
         if etas_to_insert:
@@ -589,45 +424,10 @@ def log_bus_data(conn, bus: Vehicle, all_etas_list: list, arrived_id: int):
     except Exception as e:
         print(f"  > Error logging bus data to DB: {e}", file=sys.stderr)
         conn.rollback() # Rollback on error
-
-
-def check_log_data(conn):
-    """ Prints the last row from the Bus_Logs table to verify """
-    if VERBOSE:
-        print("\n--- Verifying Data in Bus_Logs ---")
-    try:
-        c = conn.cursor()
-        c.execute("SELECT * FROM Bus_Logs ORDER BY timestamp DESC LIMIT 1")
-        row = c.fetchone()
-        if row:
-            if VERBOSE:
-                print("Most recent log entry (Bus_Logs):")
-                print(row)
-            
-            # Also show the corresponding ETAs
-            c.execute("SELECT * FROM ETA_Logs WHERE log_id = ? ORDER BY sort_order ASC", (row[0],))
-            eta_rows = c.fetchall()
-            if VERBOSE:
-                print(f"  > Found {len(eta_rows)} corresponding ETAs in ETA_Logs.")
-                for eta in eta_rows[:2]: # Print first 2
-                    print(f"    - {eta}")
-
-        else:
-            print("Bus_Logs table is empty.")
-    except Exception as e:
-        print(f"Error checking log data: {e}", file=sys.stderr)
-
-
-# ==================================================================
-# --- 3. MAIN EXECUTION (Looping) ---
-# ==================================================================
-
-# --- MODIFIED: This is the main async wrapper ---
+        
 async def main():
-    
-    # 1. Find the Rutgers System (Run Once)
     print("--- 1. Finding Rutgers University System ID ---")
-    all_systems = getSystems()
+    all_systems = pg.getSystems()
     rutgers_system = None
     for system in all_systems:
         if "rutgers" in system.name.lower():
@@ -639,61 +439,46 @@ async def main():
         sys.exit(1)
         
     print(f"Found system: {rutgers_system.name} (ID: {rutgers_system.id})\n")
-    
-    # 2. Connect to DB and create table (Run Once)
     conn = create_connection(DB_FILE)
     if conn is None:
         sys.exit(1)
     
-    # --- MODIFIED: Create both tables ---
     create_bus_log_table(conn)
-    create_eta_log_table(conn) # <-- NEW
+    create_eta_log_table(conn) 
     
-    SECONDS_PER_CYCLE = 10 # How often to log data (in seconds)
-    # --- 3. Start the infinite loop ---
+    SECONDS_PER_CYCLE = 10
     total_time_per_cycle = 0
     average_time_per_cycle = 0
     try:
         loop_count = 1
         while True:
             timer = time.time()
-            if VERBOSE:
-                print(f"\n=================================================")
-                print(f"--- STARTING LOGGING LOOP #{loop_count} ---")
-                print(f"=================================================")
-            
-                print("\n--- Fetching Active Buses ---")
             active_buses = rutgers_system.getVehicles()
             if not active_buses:
                 print("No active buses found. Waiting for next cycle.")
-                await asyncio.sleep(60) # Async sleep
+                await asyncio.sleep(60) 
                 loop_count += 1
-                continue # Skip the rest of the loop
+                continue 
             if VERBOSE:
                 print(f"Found {len(active_buses)} active buses.")
-            # 5. --- PROCESS ALL ACTIVE BUSES --- (inside loop)
             if VERBOSE:
                 print(f"--- Processing all {len(active_buses)} buses ---")
             
             for bus_to_log in active_buses:
                 start_time = time.time()
-                # --- THIS IS YOUR NEW CHECK ---
                 if bus_to_log.outOfService == 1:
                     print(f"\n--- Skipping Bus ID: {bus_to_log.id} (Name: {bus_to_log.name}) - Out of Service ---")
-                    continue # Skip to the next bus
-                # --- END OF NEW CHECK ---
+                    continue
 
                 if VERBOSE:
                     print(f"\n--- Processing Bus ID: {bus_to_log.id} (Name: {bus_to_log.name}) ---")
                 try:
-                    # --- MODIFIED: Call new function ---
                     sorted_etas, parsed_paxload = await get_all_etas_and_paxload(
                         conn, 
                         bus_to_log, 
                         rutgers_system.id
                     )
                     
-                    # Overwrite the bad paxload from getVehicles()
                     bus_to_log.paxLoad = parsed_paxload
                     
                     arrived_id = find_arrived_stop(conn, bus_to_log.latitude, bus_to_log.longitude)
@@ -702,7 +487,6 @@ async def main():
                         if VERBOSE:
                             print(f"  > STATUS: Bus has arrived at Stop ID: {arrived_id}")
                     
-                    # Find the first valid ETA to print a success message
                     first_valid_eta = next((eta for eta in sorted_etas if eta[1] != 9999), None)
                     
                     if first_valid_eta:
@@ -712,21 +496,17 @@ async def main():
                     else:
                         print("  > Could not determine next stops (API returned no ETA for this bus).")
 
-                    # --- MODIFIED: Log all data ---
                     log_bus_data(conn, bus_to_log, sorted_etas, arrived_id)
                         
                 except Exception as e:
                     print(f"\nAn error occurred during processing for bus {bus_to_log.id}: {e}", file=sys.stderr)
-                    conn.rollback() # Rollback on error for this bus
+                    conn.rollback()
                 if VERBOSE:
                     print(f"  > Processing time for bus {bus_to_log.id}: {time.time() - start_time:.2f} seconds")
             
-            # 6. Verify by checking the DB (inside loop)
             if VERBOSE:
                 print("\n--- Loop complete. Verifying last log entry. ---")
-            check_log_data(conn)
 
-            # 7. Wait for the next cycle
             loop_count += 1
             sleep_duration = SECONDS_PER_CYCLE - (time.time() - timer)
             if sleep_duration > 0:
@@ -736,24 +516,24 @@ async def main():
             current_cycle_time = time.time() - timer
             total_time_per_cycle += current_cycle_time
             average_time_per_cycle = total_time_per_cycle / (loop_count - 1)
-            print(f"--- Cycle #{loop_count - 1} complete in {current_cycle_time:.2f} seconds. Average time: {average_time_per_cycle:.2f} seconds. ---")
+            print(f"Cycle #{loop_count - 1} complete in {current_cycle_time:.2f} seconds. Average time: {average_time_per_cycle:.2f} seconds. ---")
             
 
     except KeyboardInterrupt:
-        print("\n\nKeyboardInterrupt (Ctrl+C) detected. Stopping script.")
+        print("\n\nWe are stopping the script")
     
     except Exception as e:
-        print(f"\nA critical error occurred: {e}", file=sys.stderr)
+        print(f"\nA error occurred: {e}")
 
     finally:
         # 8. Close connection (Run Once at end)
         if conn:
             conn.close()
-            print("Database connection closed.")
+            print("Closing database connection")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print(f"Critical error in main: {e}")
+        print(f"Error in main: {e}")
