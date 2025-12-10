@@ -1,18 +1,14 @@
 import sqlite3
 import sys
 import passiogo
-# --- Database Setup ---
 
 DB_FILE = "rutgers_buses.db"
 
 def create_connection(db_file):
-    """ Create a database connection to a SQLite database """
     conn = None
     try:
-        # This will create or open the file
         conn = sqlite3.connect(db_file)
         
-        # This line is important to enforce foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON")
         
         print(f"Connected to SQLite database: {db_file}")
@@ -22,7 +18,6 @@ def create_connection(db_file):
         return None
 
 def create_tables(conn):
-    """ Create the normalized tables for our bus data """
     sql_statements = [
         """
         CREATE TABLE IF NOT EXISTS Systems (
@@ -81,15 +76,11 @@ def create_tables(conn):
         for statement in sql_statements:
             c.execute(statement)
         conn.commit()
-        print("All metadata tables created successfully.")
     except Exception as e:
-        print(f"Error creating tables: {e}", file=sys.stderr)
-
-# --- Data Population Functions ---
+        print(f"Error creating table: {e}")
 
 def populate_system(conn, system):
-    """ Populates the Systems table """
-    print(f"Populating System: {system.name}")
+    print(f"Adding System: {system.name}")
     c = conn.cursor()
     c.execute(
         "INSERT OR IGNORE INTO Systems (system_id, name, agency_name, homepage) VALUES (?, ?, ?, ?)",
@@ -98,8 +89,6 @@ def populate_system(conn, system):
     conn.commit()
 
 def populate_routes(conn, system):
-    """ Populates the Routes table """
-    print("Populating Routes...")
     c = conn.cursor()
     routes = system.getRoutes()
     for route in routes:
@@ -114,13 +103,11 @@ def populate_routes(conn, system):
                  route.name, route.shortName, route.groupColor)
             )
         except (ValueError, TypeError):
-            print(f"  > Warning: Skipping route with invalid ID. Data: {route.myid}, {route.id}")
+            print(f"Skipping route insert because invalid ID. Data: {route.myid}, {route.id}")
     conn.commit()
-    print(f"Populated {len(routes)} routes.")
+    print(f"Added {len(routes)} routes.")
 
 def populate_stops_and_junction(conn, system):
-    """ Populates the Stops table AND the Route_Stops junction table """
-    print("Populating Stops and Route_Stops junction...")
     c = conn.cursor()
     stops = system.getStops()
     route_stop_count = 0
@@ -128,55 +115,37 @@ def populate_stops_and_junction(conn, system):
     
     for stop in stops:
         try:
-            # 1. Insert into Stops table
             c.execute(
                 "INSERT OR IGNORE INTO Stops (stop_id, system_id, name, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?)",
-                # Cast stop_id to INTEGER
                 (int(stop.id), int(stop.systemId), stop.name, 
                  stop.latitude, stop.longitude, stop.radius)
             )
-            #print(int(stop.id), int(stop.systemId), stop.name, 
-            #     stop.latitude, stop.longitude, stop.radius)
-            
-            # 2. Insert into Route_Stops junction table
             if stop.routesAndPositions:
                 for route_id_str, positions_list in stop.routesAndPositions.items():
                     for pos in positions_list:
                         try:
-                            # Attempt to insert into the junction table
                             c.execute(
                                 "INSERT OR IGNORE INTO Route_Stops (route_id_from_stop, stop_id, position_on_route) VALUES (?, ?, ?)",
-                                # Cast all IDs to INTEGER
                                 (int(route_id_str), int(stop.id), int(pos))
                             )
                             route_stop_count += 1
                         
-                        # --- THIS IS THE ERROR CATCHING ---
                         except sqlite3.IntegrityError as e:
                             if "FOREIGN KEY constraint failed" in str(e):
-                                fk_errors += 1
-                                # This error is expected, we'll just log the first one
-                                if fk_errors == 1:
-                                    print(f"  > REPORT: Caught expected FOREIGN KEY error.")
-                                    print(f"    > Details: Route ID '{route_id_str}' from stop '{stop.id}' does not exist in Routes table.")
+                                print(f"foreign key error.")
                             else:
-                                # Report any other, unexpected integrity errors
-                                print(f"  > Warning: Skipping Route_Stop insert due to IntegrityError: {e}")
+                                print(f"Skipping Route_Stop insert due to error: {e}")
                         except (ValueError, TypeError):
-                             print(f"  > Warning: Skipping Route_Stop with invalid ID. Data: {route_id_str}, {stop.id}")
+                             print(f"Skipping Route_Stop insert due to invalid ID. Data: {route_id_str}, {stop.id}")
         
         except (ValueError, TypeError):
-            print(f"  > Warning: Skipping stop with invalid ID. Data: {stop.id}")
+            print(f"Skipping stop insert because invalid ID. Data: {stop.id}")
     
     conn.commit()
-    print(f"Populated {len(stops)} stops.")
-    print(f"Attempted to populate {route_stop_count} route-stop associations.")
-    if fk_errors > 0:
-        print(f"*** Reported {fk_errors} total FOREIGN KEY constraint failures (as expected). ***")
+    print(f"Added {len(stops)} stops.")
+
 
 def populate_buses(conn, system):
-    """ Populates the Buses metadata table """
-    print("Populating Buses (metadata)...")
     c = conn.cursor()
     vehicles = system.getVehicles()
     for bus in vehicles:
@@ -187,16 +156,10 @@ def populate_buses(conn, system):
                 (int(bus.id), int(system.id), bus.name, bus.type)
             )
         except (ValueError, TypeError):
-             print(f"  > Warning: Skipping bus with invalid ID. Data: {bus.id}")
+             print(f"Skipping bus because invalid ID. Data: {bus.id}")
     conn.commit()
-    print(f"Populated metadata for {len(vehicles)} currently active buses.")
-
-# --- Main Execution ---
 
 if __name__ == "__main__":
-    
-    # 1. Find the Rutgers System
-    print("--- 1. Finding Rutgers University System ID ---")
     all_systems = passiogo.getSystems()
     rutgers_system = None
     for system in all_systems:
@@ -205,7 +168,7 @@ if __name__ == "__main__":
             break
     
     if not rutgers_system:
-        print("Error: Could not find 'Rutgers' system. Exiting.", file=sys.stderr)
+        print("Error: Could not find system.")
         sys.exit(1)
         
     print(f"Found system: {rutgers_system.name} (ID: {rutgers_system.id})\n")
@@ -217,21 +180,10 @@ if __name__ == "__main__":
         
     create_tables(conn)
     
-    # 3. Populate all metadata tables
-    print("\n--- Populating All Metadata Tables ---")
     try:
-        #populate_system(conn, rutgers_system)
-        #populate_routes(conn, rutgers_system)
-        # This function will now report errors instead of crashing
         populate_stops_and_junction(conn, rutgers_system) 
-        #populate_buses(conn, rutgers_system)
-        
-        print("\n--- Database Population Complete ---")
-        print(f"You can now inspect the file: {DB_FILE}")
         
     except Exception as e:
-        print(f"\nAn error occurred during population: {e}", file=sys.stderr)
-        conn.rollback() # Roll back any changes if an error occurs
+        conn.rollback()
     finally:
         conn.close()
-        print("Database connection closed.")
