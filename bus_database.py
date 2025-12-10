@@ -64,8 +64,6 @@ def create_tables(conn):
             
             PRIMARY KEY (route_id_from_stop, stop_id, position_on_route),
             FOREIGN KEY (stop_id) REFERENCES Stops (stop_id),
-            
-            -- This is the foreign key we are testing
             FOREIGN KEY (route_id_from_stop) REFERENCES Routes (route_myid) 
         );
         """
