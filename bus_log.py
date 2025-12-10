@@ -35,7 +35,7 @@ def sendApiRequest(url, body):
         return None
 
     if "error" in response_json and response_json["error"] != "":
-        print(f"API Error in Response: {response_json}")
+        print(f"API error in Response: {response_json}")
         return None
     
     return response_json
@@ -72,21 +72,20 @@ def find_arrived_stop(conn, bus_lat, bus_lon):
                 return stop_id 
         return None
     except Exception as e:
-        print(f"Error in find_arrived_stop: {e}")
+        print(f"Error in find arrived stop: {e}")
         return None
 
 DB_FILE = "rutgers_buses.db"
 
 def create_connection(db_file):
-    """ Create a database connection to a SQLite database """
     conn = None
     try:
         conn = sqlite3.connect(db_file)
         conn.execute("PRAGMA foreign_keys = ON")
-        print(f"Connected to SQLite database: {db_file}")
+        print(f"We connected to: {db_file}")
         return conn
     except Exception as e:
-        print(f"Error connecting to database: {e}", file=sys.stderr)
+        print(f"Error connecting: {e}", file=sys.stderr)
         return None
 
 def getVehicles(self) -> list["Vehicle"]:
@@ -108,12 +107,12 @@ def getVehicles(self) -> list["Vehicle"]:
             vehicle['type'] = vehicle.pop('busType', None)
             vehicle['routeName'] = vehicle.pop('route', None)
             vehicle['paxLoad'] = vehicle.pop('paxLoad100', None)
-
             allVehicles.append(Vehicle(system=self, **vehicle))
+            
         return allVehicles
-    
+   
+#creating the Bus_Logs
 def create_bus_log_table(conn):
-    """ Creates the new, simplified Bus_Logs table """
     sql_statement = """
     CREATE TABLE IF NOT EXISTS Bus_Logs (
         log_id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,10 +135,10 @@ def create_bus_log_table(conn):
         conn.commit()
         print("Bus_Logs table created or already exists.")
     except Exception as e:
-        print(f"Error creating Bus_Logs table: {e}", file=sys.stderr)
+        print(f"Error creating Bus_Logs table: {e}")
 
+#Creating the eta tables that we will use to store an eta per stop inside eahc bus log entry
 def create_eta_log_table(conn):
-    """ Creates the new table to store all ETAs """
     sql_statement = """
     CREATE TABLE IF NOT EXISTS ETA_Logs (
         log_id             INTEGER,
@@ -160,15 +159,16 @@ def create_eta_log_table(conn):
     except Exception as e:
         print(f"Error creating ETA_Logs table: {e}", file=sys.stderr)
 
+#String parsing pax load
 def parse_pax_load(pax_load_str):
     if pax_load_str is None:
         return None
     try:
-        # Remove '%' and convert to float
         return float(pax_load_str.replace('%', ''))
     except (ValueError, TypeError):
         return None
 
+# Function to get ETA data
 def get_eta_data(system_id: int, route_id: int, stop_id: int):
     url = (
         f"{PASSIO_GO_URL}/mapGetData.php"
@@ -179,7 +179,7 @@ def get_eta_data(system_id: int, route_id: int, stop_id: int):
     
     try:
         response = requests.get(url)
-        response.raise_for_status()  # Check for HTTP errors
+        response.raise_for_status() 
         
         eta_data = response.json()
         
@@ -207,14 +207,12 @@ async def _fetch_eta(session: aiohttp.ClientSession, system_id: int, route_id: i
                     if VERBOSE:
                         print(f"  > Async ETA non-200 stop {stop_id}: {resp.status} snippet={txt[:200]!r}")
                     return stop_id, None
-                # robust JSON parse: prefer resp.json(), otherwise json.loads(txt)
                 try:
                     data = await resp.json()
                 except Exception:
                     try:
                         data = json.loads(txt)
                     except Exception:
-                        # server returned HTML or invalid JSON
                         print(f"  > Async ETA invalid JSON for stop {stop_id}; content-type={resp.headers.get('content-type')} snippet={txt[:200]!r}")
                         return stop_id, None
                 if isinstance(data, dict) and data.get("error"):
@@ -229,8 +227,6 @@ async def fetch_etas_for_stops(system_id: int, route_id: int, stop_ids: list[int
     sem = asyncio.Semaphore(concurrency)
     timeout = aiohttp.ClientTimeout(total=15)
     results = {}
-
-    # Use certifi CA bundle to avoid SSLCertVerificationError
     ssl_ctx = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_ctx)
 
@@ -239,7 +235,6 @@ async def fetch_etas_for_stops(system_id: int, route_id: int, stop_ids: list[int
         for fut in asyncio.as_completed(tasks):
             sid, data = await fut
             results[str(sid)] = data
-    # debug: list failed stops
     failed = [k for k,v in results.items() if v is None]
     if failed:
         print(f"  > Async fetch: {len(failed)} stops failed or returned no data: {failed[:10]}")
@@ -248,18 +243,17 @@ async def fetch_etas_for_stops(system_id: int, route_id: int, stop_ids: list[int
 def get_stops_for_route(conn, route_myid):
     c = conn.cursor()
     try:
-        # Get all unique stop_ids for this route
         c.execute(
             """
             SELECT DISTINCT stop_id 
             FROM Route_Stops 
             WHERE route_id_from_stop = ?
             """,
-            (route_myid,) # Pass the integer ID
+            (route_myid,)
         )
-        return c.fetchall() # Returns a list of tuples like [(10052,), (10039,), ...]
+        return c.fetchall() 
     except Exception as e:
-        print(f"  > Error getting stops from DB: {e}", file=sys.stderr)
+        print(f"Error getting stops: {e}", file=sys.stderr)
         return []
 
 async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
@@ -268,34 +262,29 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
     
     if not route_myid:
         print(f"  > Bus {bus_id} has no routeId. Skipping.")
-        return [], None # Return empty list, no paxload
+        return [], None 
     
     stops_on_route = get_stops_for_route(conn, route_myid)
     if not stops_on_route:
-        print(f"  > Could not find stop list for route {route_myid} in DB.")
+        print(f"Couldn't find stop list for route {route_myid} in DB.")
         return [], None
-    if VERBOSE:
-        print(f"  > Found {len(stops_on_route)} unique stops for route {route_myid}. Fetching ETAs...")
     
-    # We will store (stop_id, eta_seconds, pax_load_string)
     eta_results = [] 
 
-    # Build list of stop ids (ints) and fetch their ETA payloads concurrently
     stop_ids = [int(sid_tuple[0]) for sid_tuple in stops_on_route]
     try:
         start_time = time.time()
         eta_map = await fetch_etas_for_stops(system_id=system_id, route_id=route_myid, stop_ids=stop_ids, concurrency=len(stop_ids))
         if VERBOSE:
-            print(f"  > Fetched all ETA payloads in {time.time() - start_time:.2f} seconds.")
+            print(f"Fetched all ETA payloads in {time.time() - start_time:.2f} seconds.")
     except Exception as e:
-        print(f"  > Async ETA fetch failed: {e}")
+        print(f"Async ETA fetch failed: {e}")
         eta_map = {}
 
     for (stop_id,) in stops_on_route:
         
         eta_data = eta_map.get(str(stop_id))
         if eta_data is None:
-            # fallback: single synchronous request
             eta_data = get_eta_data(
                 system_id=system_id,
                 route_id=route_myid,
@@ -348,13 +337,13 @@ async def get_all_etas_and_paxload(conn, bus: Vehicle, system_id: int):
                 eta_results.append((stop_id, 9999, None))
 
     if not eta_results:
-        print("  > No ETA results found.")
+        print("No ETA results")
         return [], None
         
     sorted_etas = sorted(eta_results, key=lambda x: x[1])
 
     if VERBOSE:
-        print(f"  > Sorted ETAs: {sorted_etas}")
+        print(f"Sorted ETAs: {sorted_etas}")
 
     parsed_pax_load = None
     for (_sid, _eta, pax_str) in sorted_etas:
@@ -420,10 +409,10 @@ def log_bus_data(conn, bus: Vehicle, all_etas_list: list, arrived_id: int):
         
         conn.commit()
         if VERBOSE:
-            print(f"  > Successfully logged data for bus {bus.id} (Log ID: {new_log_id}) with {len(etas_to_insert)} ETAs.")
+            print(f"Successfully logged data for bus {bus.id} (Log ID: {new_log_id}) with {len(etas_to_insert)} ETAs")
     except Exception as e:
-        print(f"  > Error logging bus data to DB: {e}", file=sys.stderr)
-        conn.rollback() # Rollback on error
+        print(f"Error logging bus data to DB: {e}")
+        conn.rollback() 
         
 async def main():
     print("--- 1. Finding Rutgers University System ID ---")
@@ -435,7 +424,7 @@ async def main():
             break
     
     if not rutgers_system:
-        print("Error: Could not find 'Rutgers' system. Exiting.", file=sys.stderr)
+        print("Error: Could not find  system")
         sys.exit(1)
         
     print(f"Found system: {rutgers_system.name} (ID: {rutgers_system.id})\n")
@@ -460,18 +449,17 @@ async def main():
                 loop_count += 1
                 continue 
             if VERBOSE:
-                print(f"Found {len(active_buses)} active buses.")
+                print(f"Found {len(active_buses)} active buse")
             if VERBOSE:
-                print(f"--- Processing all {len(active_buses)} buses ---")
+                print(f"Processing all {len(active_buses)} buses")
             
             for bus_to_log in active_buses:
                 start_time = time.time()
                 if bus_to_log.outOfService == 1:
-                    print(f"\n--- Skipping Bus ID: {bus_to_log.id} (Name: {bus_to_log.name}) - Out of Service ---")
                     continue
 
                 if VERBOSE:
-                    print(f"\n--- Processing Bus ID: {bus_to_log.id} (Name: {bus_to_log.name}) ---")
+                    print(f"\nProcessing Bus ID: {bus_to_log.id} (Name: {bus_to_log.name})")
                 try:
                     sorted_etas, parsed_paxload = await get_all_etas_and_paxload(
                         conn, 
@@ -485,16 +473,16 @@ async def main():
                     
                     if arrived_id is not None:
                         if VERBOSE:
-                            print(f"  > STATUS: Bus has arrived at Stop ID: {arrived_id}")
+                            print(f"STATUS: Bus has arrived at Stop ID: {arrived_id}")
                     
                     first_valid_eta = next((eta for eta in sorted_etas if eta[1] != 9999), None)
                     
                     if first_valid_eta:
                         eta_sec = first_valid_eta[1]
                         if VERBOSE:
-                            print(f"  > SUCCESS: Next Stop ID: {first_valid_eta[0]}, ETA: {eta_sec // 60}m {eta_sec % 60}s")
+                            print(f" SUCCESS: Next Stop ID: {first_valid_eta[0]}, ETA: {eta_sec // 60}m {eta_sec % 60}s")
                     else:
-                        print("  > Could not determine next stops (API returned no ETA for this bus).")
+                        print(" Could not determine next stops (API returned no ETA for this bus).")
 
                     log_bus_data(conn, bus_to_log, sorted_etas, arrived_id)
                         
@@ -502,21 +490,21 @@ async def main():
                     print(f"\nAn error occurred during processing for bus {bus_to_log.id}: {e}", file=sys.stderr)
                     conn.rollback()
                 if VERBOSE:
-                    print(f"  > Processing time for bus {bus_to_log.id}: {time.time() - start_time:.2f} seconds")
+                    print(f"Processing time for bus {bus_to_log.id}: {time.time() - start_time:.2f} seconds")
             
             if VERBOSE:
-                print("\n--- Loop complete. Verifying last log entry. ---")
+                print("\nLoop complete. Verifying last log entry.")
 
             loop_count += 1
             sleep_duration = SECONDS_PER_CYCLE - (time.time() - timer)
             if sleep_duration > 0:
                 if VERBOSE:
-                    print(f"\n--- Waiting {sleep_duration:.2f} seconds for next cycle ---")
+                    print(f"\nWaiting {sleep_duration:.2f} seconds for next cycle")
                 await asyncio.sleep(sleep_duration)
             current_cycle_time = time.time() - timer
             total_time_per_cycle += current_cycle_time
             average_time_per_cycle = total_time_per_cycle / (loop_count - 1)
-            print(f"Cycle #{loop_count - 1} complete in {current_cycle_time:.2f} seconds. Average time: {average_time_per_cycle:.2f} seconds. ---")
+            print(f"Cycle #{loop_count - 1} complete in {current_cycle_time:.2f} seconds. Average time: {average_time_per_cycle:.2f} seconds.")
             
 
     except KeyboardInterrupt:
@@ -526,7 +514,6 @@ async def main():
         print(f"\nA error occurred: {e}")
 
     finally:
-        # 8. Close connection (Run Once at end)
         if conn:
             conn.close()
             print("Closing database connection")
