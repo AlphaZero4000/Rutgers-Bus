@@ -109,7 +109,6 @@ def insert_bus_stops_and_routes(conn, system):
     c = conn.cursor()
     stops = system.getStops()
     route_stop_count = 0
-    fk_errors = 0
     
     for stop in stops:
         try:
